@@ -15,7 +15,7 @@
 
 const notifier = require('node-notifier');
 const path = require('path');
-
+const os = require('os');
 // 确保 notifier 模块已安装
 require.resolve('node-notifier');
 
