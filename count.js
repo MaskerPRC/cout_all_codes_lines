@@ -13,11 +13,31 @@ const fs = require("fs");
 const fsp = fs.promises;
 const path = require("path");
 
-const DEFAULT_EXTS = ["js", "vue", "md", "py", "html"];  // 默认支持的文件扩展名, "ts", "java", "cpp", "c", "go", "php", "sh", "bat", "ps1", "cmd", "css"
+// 默认支持的文件扩展名
+const DEFAULT_EXTS = [
+    // Web前端
+    "js", "ts", "jsx", "tsx", "vue", "html", "htm", "css", "scss", "sass", "less",
+    // 后端语言
+    "py", "java", "c", "cpp", "cc", "cxx", "h", "hpp", "cs", "go", "rs", "rb", "php", "kt", "swift",
+    // 脚本和配置
+    "sh", "bat", "ps1",
+    // 数据和文档
+    "sql", "md", "txt",
+    // 移动开发
+    "dart", "m", "mm",
+    // 函数式语言
+    "hs", "ml", "clj", "fs", "elm",
+    // 其他语言
+    "r", "scala", "pl", "lua", "dockerfile", "makefile", "cmake",
+];
+
+const DEFAULT_EXCLUDE_EXTS = [
+];
 const DEFAULT_EXCLUDES = [
     "node_modules",
     ".git",
     ".idea",
+    ".vs",
     "dist",
     "output",
     "dist",
@@ -78,9 +98,14 @@ function normalizeExt(ext) {
     return e;
 }
 
-function fileHasWantedExt(file, extsSet) {
+function fileHasWantedExt(file, extsSet, excludeExtsSet) {
     const ext = path.extname(file).replace(/^\./, "").toLowerCase();
-    return extsSet.has(ext);
+    // 如果在排除列表中，则不处理
+    if (excludeExtsSet.has(ext)) {
+        return false;
+    }
+    // 如果指定了扩展名列表，则必须在列表中
+    return extsSet.size === 0 || extsSet.has(ext);
 }
 
 function isExcludedDir(dirName, excludeSet) {
@@ -179,11 +204,11 @@ async function saveStatsToFile(out, rootDir) {
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
     const fileName = `代码统计结果_${timestamp}.txt`;
     const filePath = path.join(rootDir, fileName);
-    
+
     let content = `代码统计结果\n`;
     content += `统计时间: ${new Date().toLocaleString('zh-CN')}\n`;
     content += `扫描目录: ${rootDir}\n\n`;
-    
+
     // 基本统计信息
     content += `=== 基本统计 ===\n`;
     content += `扫描文件数: ${formatNumber(out.scannedFiles)}\n`;
@@ -193,31 +218,32 @@ async function saveStatsToFile(out, rootDir) {
     }
     content += `总行数: ${formatNumber(out.totalLines)}\n`;
     content += `总非空行数: ${formatNumber(out.totalNonempty)}\n\n`;
-    
+
     // 文件类型统计
     if (Object.keys(out.fileTypeStats).length > 0) {
         content += `=== 文件类型统计 ===\n`;
         const typeStatsArray = Object.entries(out.fileTypeStats)
             .map(([ext, stats]) => ({ ext, ...stats }))
             .sort((a, b) => b.nonempty - a.nonempty);
-        
+
         content += `文件类型\t文件数\t总行数\t非空行数\n`;
         content += `-`.repeat(50) + `\n`;
-        
+
         for (const typeStats of typeStatsArray) {
             content += `${typeStats.ext}\t${typeStats.files}\t${typeStats.lines}\t${typeStats.nonempty}\n`;
         }
         content += `\n`;
     }
-    
+
     // 配置信息
     content += `=== 配置信息 ===\n`;
     content += `统计天数: ${out.config.days} 天\n`;
-    content += `支持扩展名: ${out.config.exts.join(', ')}\n`;
+    content += `支持扩展名: ${out.config.exts.length > 10 ? out.config.exts.slice(0, 10).join(', ') + '...' : out.config.exts.join(', ')}\n`;
+    content += `排除扩展名: ${out.config.excludeExts.length > 10 ? out.config.excludeExts.slice(0, 10).join(', ') + '...' : out.config.excludeExts.join(', ')}\n`;
     content += `排除目录: ${out.config.excludes.slice(0, 10).join(', ')}${out.config.excludes.length > 10 ? '...' : ''}\n`;
     content += `时间字段: ${out.config.timeField}\n`;
     content += `最大文件大小: ${(out.config.maxBytes / 1024 / 1024).toFixed(1)} MB\n`;
-    
+
     try {
         await fsp.writeFile(filePath, content, 'utf8');
         console.log(`\n统计结果已保存到: ${fileName}`);
@@ -236,8 +262,38 @@ async function main() {
         process.exit(1);
     }
 
+    // 帮助信息
+    if (args.help || args.h) {
+        console.log(`
+代码行数统计工具
+
+使用方法: node count.js [options]
+
+参数说明:
+  --days, -d <数字>       统计指定天数内创建的文件 (默认: 30)
+  --ext, -e <扩展名>      指定文件扩展名，逗号分隔 (默认: 常见代码文件)
+  --exclude-ext <扩展名>  排除指定扩展名，逗号分隔 (默认: 二进制和媒体文件)
+  --exclude, -x <目录>    排除指定目录，逗号分隔
+  --dir <目录>           扫描的根目录 (默认: 当前目录)
+  --time <字段>          时间字段: birthtime|创建时间 或 mtime|修改时间 (默认: birthtime)
+  --nonempty, --ne       只统计非空行
+  --per-file, -p         显示各个文件的详细信息
+  --max-bytes <字节数>   最大文件大小限制 (默认: 10MB)
+  --help, -h             显示帮助信息
+
+示例:
+  node count.js --days 7 --ext js,ts,vue
+  node count.js --exclude-ext png,jpg,pdf --per-file
+`);
+        process.exit(0);
+    }
+
     const exts = toList(args.ext ?? args.e ?? DEFAULT_EXTS).map(normalizeExt);
     const extsSet = new Set(exts);
+
+    // 排除的文件扩展名
+    const excludeExts = toList(args['exclude-ext'] ?? args['exclude-exts'] ?? DEFAULT_EXCLUDE_EXTS).map(normalizeExt);
+    const excludeExtsSet = new Set(excludeExts);
 
     const excludes = toList(args.exclude ?? args.x ?? DEFAULT_EXCLUDES);
     const excludeSet = new Set(excludes);
@@ -261,13 +317,21 @@ async function main() {
         details: [],
         // 新增：按文件类型统计
         fileTypeStats: Object.create(null),
-        config: { days, exts: [...extsSet], excludes: [...excludeSet], timeField, nonemptyOnly, maxBytes },
+        config: {
+            days,
+            exts: [...extsSet],
+            excludeExts: [...excludeExtsSet],
+            excludes: [...excludeSet],
+            timeField,
+            nonemptyOnly,
+            maxBytes
+        },
     };
 
     for await (const filePath of walk(rootDir, { excludeSet, followSymlinks })) {
         out.scannedFiles++;
 
-        if (!fileHasWantedExt(filePath, extsSet)) continue;
+        if (!fileHasWantedExt(filePath, extsSet, excludeExtsSet)) continue;
 
         const st = await statWithFallback(filePath);
         if (!st) {
@@ -287,13 +351,13 @@ async function main() {
 
         // 获取文件扩展名
         const fileExt = path.extname(filePath).replace(/^\./, '').toLowerCase() || '无扩展名';
-        
+
         console.log("文件： " + filePath + ": " + res.nonempty + " 行 (类型: " + fileExt + ")");
 
         out.matchedFiles++;
         out.totalLines += res.lines;
         out.totalNonempty += res.nonempty;
-        
+
         // 按文件类型统计
         if (!out.fileTypeStats[fileExt]) {
             out.fileTypeStats[fileExt] = {
@@ -337,10 +401,10 @@ async function main() {
         const typeStatsArray = Object.entries(out.fileTypeStats)
             .map(([ext, stats]) => ({ ext, ...stats }))
             .sort((a, b) => b.nonempty - a.nonempty); // 按非空行数降序
-        
+
         console.log("文件类型".padEnd(12), "文件数".padStart(8), "总行数".padStart(10), "非空行数".padStart(10));
         console.log("-".repeat(40));
-        
+
         for (const typeStats of typeStatsArray) {
             console.log(
                 typeStats.ext.padEnd(12),
@@ -351,7 +415,7 @@ async function main() {
         }
         console.log();
     }
-    
+
     console.log("配置信息:", out.config);
     console.log("扫描文件数:", formatNumber(out.scannedFiles));
     console.log("匹配文件数:", formatNumber(out.matchedFiles));
@@ -367,7 +431,7 @@ async function main() {
     if (nonemptyOnly) {
         console.log("(请求的是非空行数；“总行数”仅供参考)");
     }
-    
+
     // 将统计结果输出到文件
     await saveStatsToFile(out, rootDir);
 }
